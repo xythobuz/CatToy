@@ -12,13 +12,9 @@ class Toy:
         laser: GPIO pin number of the laser diode.
     """
 
-    # first servo
-    pan_min = 20
-    pan_max = 160
-
-    # sevond servo
-    tilt_min = 0
-    tilt_max = 90
+    # maximum movements on cardboard box
+    # pan_min, pan_max, tilt_min, tilt_max
+    maximum_limits = (20, 160, 0, 90)
 
     def __init__(self, servo1 = 28, servo2 = 27, laser = 2):
         self.laserPin = PWM(Pin(laser, Pin.OUT))
@@ -28,8 +24,9 @@ class Toy:
         self.pan = Servo(servo1)
         self.tilt = Servo(servo2)
 
-        self.angle(self.pan, round((self.pan_max - self.pan_min) / 2) + self.pan_min)
-        self.angle(self.tilt, round((self.tilt_max - self.tilt_min) / 2) + self.tilt_min)
+        pan_min, pan_max, tilt_min, tilt_max = self.maximum_limits
+        self.angle(self.pan, int((pan_max - pan_min) / 2) + pan_min)
+        self.angle(self.tilt, int((tilt_max - tilt_min) / 2) + tilt_min)
         time.sleep(0.1)
         self.pan.free()
         self.tilt.free()
@@ -42,20 +39,21 @@ class Toy:
             angle = 0
         if angle > 180:
             angle = 180
-        servo.goto(round(self.map_value(angle, 0, 180, 0, 1024)))
+        servo.goto(int(self.map_value(angle, 0, 180, 0, 1024)))
 
     def laser(self, value):
         v = 1.0 - value
-        self.laserPin.duty_u16(round(v * 65535))
+        self.laserPin.duty_u16(int(v * 65535))
 
     def test(self, steps = 10):
+        pan_min, pan_max, tilt_min, tilt_max = self.maximum_limits
+
         self.laser(1)
 
-        for y in range(self.tilt_min, self.tilt_max, round((self.tilt_max - self.tilt_min) / steps)):
+        for y in range(tilt_min, tilt_max, int((tilt_max - tilt_min) / steps)):
             self.angle(self.tilt, y)
-            time.sleep(0.2)
 
-            for x in range(self.pan_min, self.pan_max, round((self.pan_max - self.pan_min) / steps)):
+            for x in range(pan_min, pan_max, int((pan_max - pan_min) / steps)):
                 self.angle(self.pan, x)
                 time.sleep(0.2)
 
