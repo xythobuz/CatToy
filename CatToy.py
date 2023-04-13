@@ -4,12 +4,16 @@ from toy import Toy
 import random
 from machine import Timer
 
-max_laser_power = 0.15
+max_laser_power = 0.1
 
 limits = [
     # pan_min, pan_max, tilt_min, tilt_max, name
     (84, 120, 53, 76, 'office desk, front right')
 ]
+
+timerRunning = False
+timerData = None
+outlineIndex = 0
 
 def buildPage(header, footer):
     html = """<!DOCTYPE html>
@@ -47,7 +51,9 @@ def buildPage(header, footer):
                 </select><br>
                 Steps: <input type="text" name="steps" value="100"><br>
                 Duration: <input type="text" name="duration" value="1000">ms<br>
-                <input type="submit" name="s" value="Start Program">
+                <input type="submit" name="s" value="Random">
+                <input type="submit" name="s" value="Outline"><br>
+                Status: %s
             </form>
             %s
         </body>
@@ -60,7 +66,11 @@ def buildPage(header, footer):
         sl += '<option value="' + val + '">' + name + '</option>'
     sl += '<option value="">None</option>'
 
-    page = html % (header, int(max_laser_power * 100.0), sl, footer)
+    status = "No program running"
+    if timerRunning:
+        status = "Program in progress"
+
+    page = html % (header, int(max_laser_power * 100.0), sl, status, footer)
     return page
 
 random.seed()
@@ -145,8 +155,19 @@ def doMove(pan_min, pan_max, tilt_min, tilt_max, dur):
     t.angle(t.tilt, tilt)
     t.angle(t.pan, pan)
 
-timerRunning = False
-timerData = None
+def doOutline(pan_min, pan_max, tilt_min, tilt_max, dur):
+    global outlineIndex
+    points = [
+        (pan_min, tilt_min),
+        (pan_min, tilt_max),
+        (pan_max, tilt_max),
+        (pan_max, tilt_min)
+    ]
+    outlineIndex = (outlineIndex + 1) % 4
+    pan, tilt = points[outlineIndex]
+    print("outline move: tilt={} pan={} duration={}".format(tilt, pan, dur))
+    t.angle(t.tilt, tilt)
+    t.angle(t.pan, pan)
 
 def timerCallback(unused):
     global timerRunning, timerData
@@ -154,27 +175,34 @@ def timerCallback(unused):
     if not timerRunning:
         return
 
-    pan_min, pan_max, tilt_min, tilt_max, steps, duration = timerData
+    pan_min, pan_max, tilt_min, tilt_max, steps, duration, outline = timerData
 
     dur = duration
-    if dur < 200:
-        dur = random.randint(200, 2000)
+    if not outline:
+        if dur < 200:
+            dur = random.randint(200, 2000)
+        else:
+            dur = random.randint(200, duration)
     else:
-        dur = random.randint(200, duration)
+        if dur < 200:
+            dur = 500
 
     if steps > 0:
         steps -= 1
-        doMove(pan_min, pan_max, tilt_min, tilt_max, dur)
+        if not outline:
+            doMove(pan_min, pan_max, tilt_min, tilt_max, dur)
+        else:
+            doOutline(pan_min, pan_max, tilt_min, tilt_max, dur)
         tim = Timer(period = dur, mode=Timer.ONE_SHOT, callback = timerCallback)
     else:
         timerRunning = False
         t.laser(0.0)
 
-    timerData = (pan_min, pan_max, tilt_min, tilt_max, steps, duration)
+    timerData = (pan_min, pan_max, tilt_min, tilt_max, steps, duration, outline)
 
-def startRepeat(pan_min, pan_max, tilt_min, tilt_max, steps, duration):
+def startRepeat(pan_min, pan_max, tilt_min, tilt_max, steps, duration, outline):
     global timerRunning, timerData
-    timerData = (pan_min, pan_max, tilt_min, tilt_max, steps, duration)
+    timerData = (pan_min, pan_max, tilt_min, tilt_max, steps, duration, outline)
 
     if not timerRunning:
         timerRunning = True
@@ -188,22 +216,26 @@ def stopRepeat():
 
 def repeatCallback(request):
     q = request.find("/repeat?")
-    pl = request.find("limit=")
-    ps = request.find("steps=")
-    pd = request.find("duration=")
-    if (q < 0) or (pl < 0) or (ps < 0) or (pd < 0):
-        print("repeat query error: q={} pl={} ps={} pd={}".format(q, pl, ps, pd))
+    pl = request.find("limit=", q)
+    ps = request.find("steps=", pl)
+    pd = request.find("duration=", ps)
+    pp = request.find("s=", pd)
+    if (q < 0) or (pl < 0) or (ps < 0) or (pd < 0) or (pp < 0):
+        print("repeat query error: q={} pl={} ps={} pd={} pp={}".format(q, pl, ps, pd, pp))
         return buildPage(
             '<p>Error: no repeat arguments found in URL query string.</p>',
             '<p><a href="/">Back to main page</a></p>'
         )
 
-    data = [("limit=", pl), ("steps=", ps), ("duration=", pd)]
+    data = [("limit=", pl), ("steps=", ps), ("duration=", pd), ("s=", pp)]
     result = []
     for s, p in data:
+        #print(p)
         pe = request.find("&", p)
+        #print(pe)
         if (pe < 0) or (p + len(s) > pe) or (pe - (p + 3) > 40):
             pe = request.find(" HTTP", p)
+            #print(pe)
         if (pe < 0) or (p + len(s) > pe) or (pe - (p + 3) > 40):
             print("repeat query error: p={} pe={}".format(p, pe))
             return buildPage(
@@ -212,8 +244,9 @@ def repeatCallback(request):
             )
         r = request[p + len(s) : pe]
         result.append(r)
+        #print()
 
-    print("repeat: limit={} steps={} duration={}".format(result[0], result[1], result[2]))
+    print("repeat: limit={} steps={} duration={} s={}".format(result[0], result[1], result[2], result[3]))
 
     if len(result[0]) == 0:
         stopRepeat()
@@ -222,10 +255,14 @@ def repeatCallback(request):
             '<p><a href="/">Back to main page</a></p>'
         )
 
+    outline = False
+    if result[3].lower() == "outline":
+        outline = True
+
     for pan_min, pan_max, tilt_min, tilt_max, name in limits:
         val = name.replace(' ', '_').replace(',', '').lower()
         if result[0] == val:
-            startRepeat(pan_min, pan_max, tilt_min, tilt_max, int(result[1]), int(result[2]))
+            startRepeat(pan_min, pan_max, tilt_min, tilt_max, int(result[1]), int(result[2]), outline)
             break
 
     return buildPage(
