@@ -1,19 +1,44 @@
 from wifi import Wifi
 from config import Config
 from toy import Toy
+from log import LogDup
 import random
+import time
 from machine import Timer
+import os
+
+stdio_data = LogDup()
+os.dupterm(stdio_data)
+
+print("Initializing CatToy...")
+t = Toy()
 
 max_laser_power = 0.1
 
 limits = [
     # pan_min, pan_max, tilt_min, tilt_max, name
-    (84, 120, 53, 76, 'office desk, front right')
+    (84, 120, 53, 76, '3d printer tower, top'),
+    (84, 120, 53, 76, 'office desk, front right'),
+    (t.maximum_limits[0], t.maximum_limits[1], t.maximum_limits[2], t.maximum_limits[3], 'maximum'),
 ]
+
+minimumBatteryVoltage = 3.25 * 2.0
+maximumBatteryVoltage = 4.2 * 2.0
 
 timerRunning = False
 timerData = None
 outlineIndex = 0
+buttonSelection = 0
+ledPattern = None
+patternIndex = 0
+patternTime = time.ticks_ms()
+buttonTime = None
+
+repeatTimer = Timer()
+buttonTimer = Timer()
+ledTimer = Timer()
+
+random.seed()
 
 def buildPage(header, footer):
     html = """<!DOCTYPE html>
@@ -55,7 +80,11 @@ def buildPage(header, footer):
                 <input type="submit" name="s" value="Outline"><br>
                 Status: %s
             </form>
+            <h2>Status</h2>
+            <p><b>Battery:</b> %s
             %s
+            <h2>Console</h2>
+            <pre>%s</pre>
         </body>
     </html>
     """
@@ -70,19 +99,30 @@ def buildPage(header, footer):
     if timerRunning:
         status = "Program in progress"
 
-    page = html % (header, int(max_laser_power * 100.0), sl, status, footer)
+    vb = t.getBatteryVoltage()
+    pb = (vb - minimumBatteryVoltage) / (maximumBatteryVoltage - minimumBatteryVoltage) * 100.0
+    pb = max(min(pb, 100), 0)
+    battery = str(vb) + "V (" + str(pb) + "%)"
+
+    page = html % (header, int(max_laser_power * 100.0), sl, status, battery, footer, stdio_data.data.decode("utf-8"))
     return page
 
-random.seed()
-t = Toy()
-
 def rootCallback(request):
+    pan_min, pan_max, tilt_min, tilt_max = t.maximum_limits
     return buildPage(
         '<p>Welcome to the Cat Toy interface by <a href="https://www.xythobuz.de">xythobuz</a>.</p>',
-        "<p><b>Limits:</b> tMin={} tMax={} pMin={} pMax={}</p>".format(t.tilt_min, t.tilt_max, t.pan_min, t.pan_max)
+        "<p><b>Limits:</b> tMin={} tMax={} pMin={} pMax={}</p>".format(tilt_min, tilt_max, pan_min, pan_max)
     )
 
 def servoCallback(request):
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        stopRepeat()
+        t.free()
+        return buildPage(
+            '<p>Error: Battery Voltage too low. <b>Please charge them!</b></p>',
+            '<p><a href="/">Back to main page</a></p>'
+        )
+
     q = request.find("/servos?")
     p1 = request.find("s1=")
     p2 = request.find("s2=")
@@ -119,6 +159,14 @@ def servoCallback(request):
     )
 
 def laserCallback(request):
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        stopRepeat()
+        t.free()
+        return buildPage(
+            '<p>Error: Battery Voltage too low. <b>Please charge them!</b></p>',
+            '<p><a href="/">Back to main page</a></p>'
+        )
+
     value = 0.0
     text = "off"
 
@@ -138,6 +186,14 @@ def laserCallback(request):
     )
 
 def randomMoveCallback(request):
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        stopRepeat()
+        t.free()
+        return buildPage(
+            '<p>Error: Battery Voltage too low. <b>Please charge them!</b></p>',
+            '<p><a href="/">Back to main page</a></p>'
+        )
+
     tilt = random.randint(t.tilt_min, t.tilt_max)
     pan = random.randint(t.pan_min, t.pan_max)
     print("random: tilt={} pan={}".format(tilt, pan))
@@ -170,7 +226,13 @@ def doOutline(pan_min, pan_max, tilt_min, tilt_max, dur):
     t.angle(t.pan, pan)
 
 def timerCallback(unused):
-    global timerRunning, timerData
+    global timerRunning, timerData, repeatTimer
+
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        print("Abort due to low battery voltage: " + str(t.getBatteryVoltage()))
+        stopRepeat()
+        t.free()
+        return
 
     if not timerRunning:
         return
@@ -193,7 +255,7 @@ def timerCallback(unused):
             doMove(pan_min, pan_max, tilt_min, tilt_max, dur)
         else:
             doOutline(pan_min, pan_max, tilt_min, tilt_max, dur)
-        tim = Timer(period = dur, mode=Timer.ONE_SHOT, callback = timerCallback)
+        repeatTimer.init(period = dur, mode = Timer.ONE_SHOT, callback = timerCallback)
     else:
         timerRunning = False
         t.laser(0.0)
@@ -215,6 +277,14 @@ def stopRepeat():
     t.laser(0.0)
 
 def repeatCallback(request):
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        stopRepeat()
+        t.free()
+        return buildPage(
+            '<p>Error: Battery Voltage too low. <b>Please charge them!</b></p>',
+            '<p><a href="/">Back to main page</a></p>'
+        )
+
     q = request.find("/repeat?")
     pl = request.find("limit=", q)
     ps = request.find("steps=", pl)
@@ -270,6 +340,63 @@ def repeatCallback(request):
         '<p><a href="/">Back to main page</a></p>'
     )
 
+def buttonCallback(state):
+    global timerRunning, buttonSelection, buttonTime
+
+    if state:
+        buttonTime = time.ticks_ms()
+    elif buttonTime != None:
+        if time.ticks_diff(time.ticks_ms(), buttonTime) <= 500:
+            buttonSelection = (buttonSelection + 1) % len(limits)
+            print("Selection: " + str(buttonSelection + 1))
+        else:
+            if not timerRunning:
+                pan_min, pan_max, tilt_min, tilt_max, name = limits[buttonSelection]
+                print("Start pattern " + name)
+                startRepeat(pan_min, pan_max, tilt_min, tilt_max, 200, 2500, False)
+            else:
+                print("Stop")
+                stopRepeat()
+
+def ledStatus():
+    global timerRunning, buttonSelection, ledPattern, patternIndex, patternTime
+    patternMode = False
+
+    if t.getBatteryVoltage() < minimumBatteryVoltage:
+        patternMode = True
+        pattern = [ 100, 100 ]
+    elif timerRunning:
+        t.status(True)
+    else:
+        patternMode = True
+        pattern = [ 300 ] * (buttonSelection * 2 + 1) + [ 1500 ]
+
+    if patternMode:
+        if pattern != ledPattern:
+            ledPattern = pattern
+            patternIndex = 0
+            patternTime = time.ticks_ms()
+
+        if time.ticks_diff(time.ticks_ms(), patternTime) >= ledPattern[patternIndex]:
+            t.status(patternIndex % 2 == 1)
+            patternIndex = (patternIndex + 1) % len(ledPattern)
+            patternTime = time.ticks_ms()
+
+def buttonTimerCallback(timer):
+    global buttonTimer
+    t.poll(buttonCallback)
+    buttonTimer.init(period = 25, mode = Timer.ONE_SHOT, callback = buttonTimerCallback)
+
+def ledTimerCallback(timer):
+    global ledTimer
+    ledStatus()
+    ledTimer.init(period = 100, mode = Timer.ONE_SHOT, callback = ledTimerCallback)
+
+print("Starting Timers...")
+buttonTimerCallback(None)
+ledTimerCallback(None)
+
+print("Initializing WiFi...")
 w = Wifi(Config.ssid, Config.password)
 w.add_handler("/", rootCallback)
 w.add_handler("/servos", servoCallback)
@@ -277,3 +404,5 @@ w.add_handler("/laser", laserCallback)
 w.add_handler("/random_move", randomMoveCallback)
 w.add_handler("/repeat", repeatCallback)
 w.listen()
+
+print("Ready!")
