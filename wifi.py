@@ -17,17 +17,30 @@ class Wifi:
     </html>
     """
 
-    def __init__(self, ssid, password, port = 80):
+    def __init__(self, networks, port = 80):
         # Check if wifi details have been set
-        if len(ssid) == 0 or len(password) == 0:
-            raise RuntimeError('Please set wifi ssid and password in config.py')
+        if len(networks) == 0:
             self.led.value(1)
+            raise RuntimeError('Please set wifi ssid and password in config.py')
 
         self.led = Pin("LED", Pin.OUT)
 
         # Start connection
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
+        visible = self.wlan.scan()
+        ssid = None
+        password = None
+        for name, a, b, c, d, e in visible:
+            for t_ssid, t_password in networks:
+                if name.decode("utf-8") == t_ssid:
+                    ssid = t_ssid
+                    password = t_password
+                    break
+        if (ssid == None) or (password == None):
+            self.led.value(1)
+            raise RuntimeError("No known network found")
+
         self.wlan.connect(ssid, password)
 
         # Wait for connect success or failure
@@ -49,8 +62,8 @@ class Wifi:
 
         # Handle connection error
         if self.wlan.status() != 3:
-            raise RuntimeError('wifi connection failed %d' % self.wlan.status())
             self.led.value(1)
+            raise RuntimeError('wifi connection failed %d' % self.wlan.status())
 
         print('connected')
         status = self.wlan.ifconfig()

@@ -1,4 +1,5 @@
 class Config:
-# Set your wifi ssid and password here
-    ssid = const('')
-    password = const('')
+    networks = [
+        ("SSID_1", "PASS_1"),
+        ("SSID_2", "PASS_2"),
+    ]

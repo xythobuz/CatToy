@@ -397,7 +397,7 @@ buttonTimerCallback(None)
 ledTimerCallback(None)
 
 print("Initializing WiFi...")
-w = Wifi(Config.ssid, Config.password)
+w = Wifi(Config.networks)
 w.add_handler("/", rootCallback)
 w.add_handler("/servos", servoCallback)
 w.add_handler("/laser", laserCallback)
